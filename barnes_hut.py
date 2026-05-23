@@ -8,8 +8,25 @@ WIDTH = 100.0
 HEIGHT = 100.0
 
 
+class Body:
+
+    _id_counter = 0
+
+    def __init__(self,  position: np.ndarray, mass: float):
+        self.id = Body._id_counter
+        Body._id_counter += 1
+
+        self.position = position
+        self.mass = mass
+
+    def __eq__(self, other: 'Body'):
+        return other.id == self.id
+
+
 def random_bodies(N: int):
-    return np.random.random((N, 2)) * np.array([WIDTH, HEIGHT])
+    coords = np.random.random((N, 2)) * np.array([WIDTH, HEIGHT])
+    bodies = [Body(coords[i], 1.0) for i in range(N)]
+    return bodies
 
 
 class NodeType(Enum):
@@ -49,13 +66,13 @@ class ExternalNode(QuadNode):
         self.body = body
 
 
-def get_quadrant(node: QuadNode, body: np.ndarray) -> str:
+def get_quadrant(node: QuadNode, body: Body) -> str:
     mid_x = node.x0 + node.width/2
     mid_y = node.y0 + node.height/2
 
-    if body[0] <= mid_x:
+    if body.position[0] <= mid_x:
         # left
-        if body[1] <= mid_y:
+        if body.position[1] <= mid_y:
             # top
             return 'top_l'
         else:
@@ -63,7 +80,7 @@ def get_quadrant(node: QuadNode, body: np.ndarray) -> str:
             return 'bot_l'
     else:
         # right
-        if body[1] <= mid_y:
+        if body.position[1] <= mid_y:
             # top
             return 'top_r'
         else:
@@ -85,7 +102,7 @@ def make_children(node: ExternalNode) -> InternalNode:
                         bot_r=ExternalNode(mid_x, mid_y, w2, h2, None))
 
 
-def insert(tree: QuadNode, body: np.ndarray):
+def insert(tree: QuadNode, body: Body):
 
     if tree.type is NodeType.EXTERNAL:
 
@@ -119,10 +136,10 @@ class QuadTree:
     def __init__(self, height: float, width: float):
         self.root = ExternalNode(.0, .0, width, height, None)
 
-    def insert(self, body: np.ndarray):
+    def insert(self, body: Body):
         self.root = insert(self.root, body)
 
-    def insert_list(self, bodies: list[type[np.ndarray]]):
+    def insert_list(self, bodies: list[type[Body]]):
         for b in bodies:
             self.insert(b)
 
@@ -132,7 +149,7 @@ def plot_quadtree(tree: QuadNode, ax: plt.Axes):
     if tree.type is NodeType.EXTERNAL:
         if tree.body is not None:
             body = tree.body
-            ax.plot(body[0], body[1], 'ro', zorder=3)
+            ax.plot(body.position[0], body.position[1], 'ro', zorder=3)
         return
     else:  # internal node
 
