@@ -2,22 +2,25 @@ from enum import Enum
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.animation import FuncAnimation
 
 
 WIDTH = 100.0
 HEIGHT = 100.0
+G = 1.0
 
 
 class Body:
 
     _id_counter = 0
 
-    def __init__(self,  position: np.ndarray, mass: float):
+    def __init__(self,  position: np.ndarray, mass: float, velocity: np.ndarray):
         self.id = Body._id_counter
         Body._id_counter += 1
 
         self.position = position
         self.mass = mass
+        self.velocity = velocity
 
     def __eq__(self, other: 'Body'):
         return other.id == self.id
@@ -25,7 +28,7 @@ class Body:
 
 def random_bodies(N: int):
     coords = np.random.random((N, 2)) * np.array([WIDTH, HEIGHT])
-    bodies = [Body(coords[i], 1.0) for i in range(N)]
+    bodies = [Body(coords[i], 1.0, np.zeros(2)) for i in range(N)]
     return bodies
 
 
@@ -133,7 +136,7 @@ def insert(tree: QuadNode, body: Body):
 
 class QuadTree:
 
-    def __init__(self, height: float, width: float):
+    def __init__(self, width: float, height: float):
         self.root = ExternalNode(.0, .0, width, height, None)
 
     def insert(self, body: Body):
@@ -166,8 +169,49 @@ def plot_quadtree(tree: QuadNode, ax: plt.Axes):
         plot_quadtree(tree.bot_r, ax)
 
 
-tree = QuadTree(100.0, 100.0)
-bodies = random_bodies(100)
+def gravitational_force(other_body: Body, body: Body) -> np.ndarray:
+    if other_body == body:
+        return np.zeros(2)
+    diff = other_body.position - body.position
+    return -G * other_body.mass * body.mass / np.linalg.norm(diff)**3 * diff
+
+
+THETA = 0.5
+
+
+def node_mass(tree: QuadNode):
+    if tree.type is NodeType.INTERNAL:
+        return node_mass(tree.top_l) + node_mass(tree.top_r) + node_mass(tree.bot_l) + node_mass(tree.bot_r)
+    else:
+        return 0 if tree.body is None else tree.body.mass
+
+
+def compute_force(tree: QuadNode, body: Body):
+    if tree.type is NodeType.EXTERNAL:
+        other_body = tree.body
+
+        return np.zeros(2) if other_body is None else gravitational_force(other_body, body)
+    else:
+
+        s = tree.width
+        mid_x = tree.x0 + tree.width/2
+        mid_y = tree.y0 + tree.height/2
+        d = np.sqrt((mid_x - body.position[0])
+                    ** 2+(mid_y - body.position[1])**2)
+
+        if s/d < THETA:
+            # treat as external node
+            total_mass = node_mass(tree)
+            node_body = Body(position=np.array(
+                [mid_x, mid_y]), mass=total_mass, velocity=np.zeros(2))
+            return gravitational_force(node_body, body)
+        else:
+            return compute_force(tree.top_l, body) + compute_force(tree.top_r, body) + compute_force(tree.bot_l, body) + compute_force(tree.bot_r, body)
+
+
+tree = QuadTree(WIDTH, HEIGHT)
+N_BODIES = 1_000
+bodies = random_bodies(N_BODIES)
 tree.insert_list(bodies)
 
 fig, ax = plt.subplots()
@@ -181,4 +225,35 @@ ax.axis('equal')
 
 plot_quadtree(tree.root, ax)
 
+plt.show()
+
+DT = 0.1
+
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.set_xlim(0, WIDTH)
+ax.set_ylim(0, HEIGHT)
+ax.set_aspect('equal')
+
+scatter = ax.plot([], [], 'ro', markersize=2)[0]
+
+
+def update(frame):
+    global bodies
+
+    tree = QuadTree(WIDTH, HEIGHT)
+    tree.insert_list(bodies)
+
+    for body in bodies:
+        force = compute_force(tree.root, body)
+        acceleration = force/body.mass
+        body.velocity = body.velocity + DT * acceleration
+        body.position = body.position + DT * body.velocity
+
+    xs = [b.position[0] for b in bodies]
+    ys = [b.position[1] for b in bodies]
+    scatter.set_data(xs, ys)
+    return scatter,
+
+
+anim = FuncAnimation(fig, update, interval=30, blit=True)
 plt.show()
