@@ -3,10 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
+import sys
 
 
 WIDTH = 100.0
 HEIGHT = 100.0
+MIN_CELL_SIZE = 1e-2
 G = 1.0
 
 
@@ -59,6 +61,7 @@ class InternalNode(QuadNode):
         self.top_r = top_r
         self.bot_l = bot_l
         self.bot_r = bot_r
+        self.total_mass = 0.0
 
 
 class ExternalNode(QuadNode):
@@ -105,7 +108,7 @@ def make_children(node: ExternalNode) -> InternalNode:
                         bot_r=ExternalNode(mid_x, mid_y, w2, h2, None))
 
 
-def insert(tree: QuadNode, body: Body):
+def insert_recursive(tree: QuadNode, body: Body):
 
     if tree.type is NodeType.EXTERNAL:
 
@@ -121,17 +124,63 @@ def insert(tree: QuadNode, body: Body):
         quad_new = get_quadrant(new_tree, body)
 
         setattr(new_tree, quad_old,
-                insert(getattr(new_tree, quad_old), old_body))
+                insert_recursive(getattr(new_tree, quad_old), old_body))
         setattr(new_tree, quad_new,
-                insert(getattr(new_tree, quad_new), body))
+                insert_recursive(getattr(new_tree, quad_new), body))
+
+        new_tree.total_mass += old_body.mass + body.mass
 
         return new_tree
 
     else:  # internal node
         quad = get_quadrant(tree, body)
+        tree.total_mass += body.mass
         setattr(tree, quad,
-                insert(getattr(tree, quad), body))
+                insert_recursive(getattr(tree, quad), body))
         return tree
+
+
+def insert_iterative(tree: QuadNode, body: Body):
+    node = tree
+    parent = None
+    parent_attr = None
+
+    while True:
+        if node.type is NodeType.INTERNAL:
+            node.total_mass += body.mass
+            parent = node
+            parent_attr = get_quadrant(parent, body)
+            node = getattr(parent, parent_attr)
+            continue
+
+        # external node
+        if node.body is None:
+            node.body = body
+            return tree
+
+        # leaf is not empty, we need to subdivide
+        # prevent infinite recursion here with a minimum cell size
+        if node.width < MIN_CELL_SIZE or node.height < MIN_CELL_SIZE:
+            # we combine the 2 masses
+            node.body.mass += body.mass
+            return tree
+
+        old_body = node.body
+
+        new_node = make_children(node)
+
+        if parent is None:
+            tree = new_node
+        else:
+            setattr(parent, parent_attr, new_node)
+
+        new_node.total_mass += old_body.mass
+        q_old = get_quadrant(new_node, old_body)
+        getattr(new_node, q_old).body = old_body
+
+        node = new_node
+
+        parent = parent
 
 
 class QuadTree:
@@ -140,7 +189,7 @@ class QuadTree:
         self.root = ExternalNode(.0, .0, width, height, None)
 
     def insert(self, body: Body):
-        self.root = insert(self.root, body)
+        self.root = insert_iterative(self.root, body)
 
     def insert_list(self, bodies: list[type[Body]]):
         for b in bodies:
@@ -169,21 +218,17 @@ def plot_quadtree(tree: QuadNode, ax: plt.Axes):
         plot_quadtree(tree.bot_r, ax)
 
 
+EPSILON = 1e-3
+
+
 def gravitational_force(other_body: Body, body: Body) -> np.ndarray:
     if other_body == body:
         return np.zeros(2)
     diff = other_body.position - body.position
-    return -G * other_body.mass * body.mass / np.linalg.norm(diff)**3 * diff
+    return G * other_body.mass * body.mass / (np.linalg.norm(diff)**3+EPSILON**2) * diff
 
 
 THETA = 0.5
-
-
-def node_mass(tree: QuadNode):
-    if tree.type is NodeType.INTERNAL:
-        return node_mass(tree.top_l) + node_mass(tree.top_r) + node_mass(tree.bot_l) + node_mass(tree.bot_r)
-    else:
-        return 0 if tree.body is None else tree.body.mass
 
 
 def compute_force(tree: QuadNode, body: Body):
@@ -201,7 +246,7 @@ def compute_force(tree: QuadNode, body: Body):
 
         if s/d < THETA:
             # treat as external node
-            total_mass = node_mass(tree)
+            total_mass = tree.total_mass
             node_body = Body(position=np.array(
                 [mid_x, mid_y]), mass=total_mass, velocity=np.zeros(2))
             return gravitational_force(node_body, body)
@@ -210,7 +255,7 @@ def compute_force(tree: QuadNode, body: Body):
 
 
 tree = QuadTree(WIDTH, HEIGHT)
-N_BODIES = 1_000
+N_BODIES = 1000
 bodies = random_bodies(N_BODIES)
 tree.insert_list(bodies)
 
@@ -237,21 +282,34 @@ ax.set_aspect('equal')
 scatter = ax.plot([], [], 'ro', markersize=2)[0]
 
 
+def compute_all_forces(bodies: list[type[Body]], tree: QuadNode):
+    forces = np.zeros((len(bodies), 2))
+    for i, body in enumerate(bodies):
+        forces[i] = compute_force(tree, body)
+    return forces
+
+
 def update(frame):
     global bodies
 
     tree = QuadTree(WIDTH, HEIGHT)
     tree.insert_list(bodies)
 
-    for body in bodies:
-        force = compute_force(tree.root, body)
-        acceleration = force/body.mass
-        body.velocity = body.velocity + DT * acceleration
-        body.position = body.position + DT * body.velocity
+    positions = np.array([b.position for b in bodies])
+    velocities = np.array([b.velocity for b in bodies])
+    masses = np.array([b.mass for b in bodies])
 
-    xs = [b.position[0] for b in bodies]
-    ys = [b.position[1] for b in bodies]
-    scatter.set_data(xs, ys)
+    forces = compute_all_forces(bodies, tree.root)
+    accelerations = forces / masses[:, np.newaxis]
+
+    velocities += DT * accelerations
+    positions += DT * velocities
+
+    for i, body in enumerate(bodies):
+        body.velocity = velocities[i]
+        body.position = positions[i]
+
+    scatter.set_data(positions[:, 0], positions[:, 1])
     return scatter,
 
 
