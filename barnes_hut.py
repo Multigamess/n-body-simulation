@@ -228,14 +228,15 @@ def plot_quadtree(tree: QuadNode, ax: plt.Axes):
         plot_quadtree(tree.bot_r, ax)
 
 
-EPSILON = 1e-3
+EPSILON = 1.0
+EPSILON_SQ = EPSILON*EPSILON
 
 
 def gravitational_force(other_body: Body, body: Body) -> np.ndarray:
     if other_body == body:
         return np.zeros(2)
     diff = other_body.position - body.position
-    return G * other_body.mass * body.mass / (np.linalg.norm(diff)**3+EPSILON**2) * diff
+    return G * other_body.mass * body.mass / (np.linalg.norm(diff)+EPSILON)**3 * diff
 
 
 THETA = 0.5
@@ -276,12 +277,12 @@ def compute_force_iterative(tree: QuadNode, body: Body):
 
         if node.type is NodeType.EXTERNAL:
             node_body = node.body
-            if node_body is not None and node_body != node_body:
+            if node_body is not None and node_body != body:
                 dx = node_body.position[0] - px
                 dy = node_body.position[1] - py
                 d2 = dx*dx + dy*dy
-                factor = G * node_body.mass * pmass / \
-                    (d2 * np.sqrt(d2) + EPSILON)
+                soft = d2 + EPSILON_SQ
+                factor = G * node_body.mass * pmass / (soft * np.sqrt(soft))
                 fx += factor * dx
                 fy += factor * dy
 
@@ -292,8 +293,8 @@ def compute_force_iterative(tree: QuadNode, body: Body):
             d2 = dx*dx + dy*dy
 
             if node.width * node.width < THETA_SQ * d2:
-                factor = G * node.total_mass * \
-                    pmass / (d2 * np.sqrt(d2) + EPSILON)
+                soft = d2 + EPSILON_SQ
+                factor = G * node.total_mass * pmass / (soft * np.sqrt(soft))
                 fx += factor * dx
                 fy += factor * dy
             else:
@@ -302,7 +303,7 @@ def compute_force_iterative(tree: QuadNode, body: Body):
                 stack.append(node.bot_l)
                 stack.append(node.bot_r)
 
-    return np.array([fx, fy])
+    return (fx, fy)
 
 
 tree = QuadTree(WIDTH, HEIGHT)
