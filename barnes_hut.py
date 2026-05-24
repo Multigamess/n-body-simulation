@@ -62,6 +62,8 @@ class InternalNode(QuadNode):
         self.bot_l = bot_l
         self.bot_r = bot_r
         self.total_mass = 0.0
+        self.bar_x = 0.0
+        self.bar_y = 0.0
 
 
 class ExternalNode(QuadNode):
@@ -147,7 +149,13 @@ def insert_iterative(tree: QuadNode, body: Body):
 
     while True:
         if node.type is NodeType.INTERNAL:
-            node.total_mass += body.mass
+            total_mass_new = node.total_mass + body.mass
+            node.bar_x = (node.total_mass * node.bar_x +
+                          body.mass * body.position[0])/total_mass_new
+            node.bar_y = (node.total_mass * node.bar_y +
+                          body.mass * body.position[1])/total_mass_new
+            node.total_mass = total_mass_new
+
             parent = node
             parent_attr = get_quadrant(parent, body)
             node = getattr(parent, parent_attr)
@@ -175,6 +183,8 @@ def insert_iterative(tree: QuadNode, body: Body):
             setattr(parent, parent_attr, new_node)
 
         new_node.total_mass += old_body.mass
+        new_node.bar_x = old_body.position[0]
+        new_node.bar_y = old_body.position[1]
         q_old = get_quadrant(new_node, old_body)
         getattr(new_node, q_old).body = old_body
 
@@ -229,9 +239,10 @@ def gravitational_force(other_body: Body, body: Body) -> np.ndarray:
 
 
 THETA = 0.5
+THETA_SQ = THETA * THETA
 
 
-def compute_force(tree: QuadNode, body: Body):
+def compute_force_recursive(tree: QuadNode, body: Body):
     if tree.type is NodeType.EXTERNAL:
         other_body = tree.body
 
@@ -251,7 +262,47 @@ def compute_force(tree: QuadNode, body: Body):
                 [mid_x, mid_y]), mass=total_mass, velocity=np.zeros(2))
             return gravitational_force(node_body, body)
         else:
-            return compute_force(tree.top_l, body) + compute_force(tree.top_r, body) + compute_force(tree.bot_l, body) + compute_force(tree.bot_r, body)
+            return compute_force_recursive(tree.top_l, body) + compute_force_recursive(tree.top_r, body) + compute_force_recursive(tree.bot_l, body) + compute_force_recursive(tree.bot_r, body)
+
+
+def compute_force_iterative(tree: QuadNode, body: Body):
+    px, py = body.position[0], body.position[1]
+    pmass = body.mass
+    fx, fy = 0.0, 0.0
+
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+
+        if node.type is NodeType.EXTERNAL:
+            node_body = node.body
+            if node_body is not None and node_body != node_body:
+                dx = node_body.position[0] - px
+                dy = node_body.position[1] - py
+                d2 = dx*dx + dy*dy
+                factor = G * node_body.mass * pmass / \
+                    (d2 * np.sqrt(d2) + EPSILON)
+                fx += factor * dx
+                fy += factor * dy
+
+        else:
+
+            dx = node.bar_x - px
+            dy = node.bar_y - py
+            d2 = dx*dx + dy*dy
+
+            if node.width * node.width < THETA_SQ * d2:
+                factor = G * node.total_mass * \
+                    pmass / (d2 * np.sqrt(d2) + EPSILON)
+                fx += factor * dx
+                fy += factor * dy
+            else:
+                stack.append(node.top_l)
+                stack.append(node.top_r)
+                stack.append(node.bot_l)
+                stack.append(node.bot_r)
+
+    return np.array([fx, fy])
 
 
 tree = QuadTree(WIDTH, HEIGHT)
@@ -285,7 +336,7 @@ scatter = ax.plot([], [], 'ro', markersize=2)[0]
 def compute_all_forces(bodies: list[type[Body]], tree: QuadNode):
     forces = np.zeros((len(bodies), 2))
     for i, body in enumerate(bodies):
-        forces[i] = compute_force(tree, body)
+        forces[i] = compute_force_iterative(tree, body)
     return forces
 
 
